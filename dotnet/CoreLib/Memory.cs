@@ -178,6 +178,28 @@ public class Memory : ISemanticMemoryClient
     }
 
     /// <inheritdoc />
+    public Task<SearchResult> SearchAsync(
+        ReadOnlyMemory<float> vector,
+        MemoryFilter? filter,
+        int limit = -1,
+        CancellationToken cancellationToken = default)
+    {
+        return this.SearchAsync(vector: vector, index: null, filter, limit, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<SearchResult> SearchAsync(
+        ReadOnlyMemory<float> vector,
+        string? index = null,
+        MemoryFilter? filter = null,
+        int limit = -1,
+        CancellationToken cancellationToken = default)
+    {
+        index = IndexExtensions.CleanName(index);
+        return this._searchClient.SearchAsync(index: index, vector: vector, filter, limit: limit, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<MemoryAnswer> AskAsync(
         string question,
         MemoryFilter? filter,

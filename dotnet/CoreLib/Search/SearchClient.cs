@@ -150,6 +150,103 @@ public class SearchClient
         return result;
     }
 
+    public async Task<SearchResult> SearchAsync(
+        string index,
+        ReadOnlyMemory<float> vector,
+        MemoryFilter? filter = null,
+        int limit = -1,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit <= 0) { limit = MaxMatchesCount; }
+
+        var result = new SearchResult
+        {
+            Query = "",
+            Results = new List<Citation>()
+        };
+
+        if (filter == null)
+        {
+            filter = new MemoryFilter();
+        }
+
+        this._log.LogTrace("Fetching relevant memories");
+        IAsyncEnumerable<(MemoryRecord, double)> matches = this._vectorDb.GetSimilarListAsync(
+            indexName: index, vector, limit, filter.MinRelevance, filter, false, cancellationToken: cancellationToken);
+
+        // Memories are sorted by relevance, starting from the most relevant
+        await foreach ((MemoryRecord memory, double relevance) in matches.WithCancellation(cancellationToken))
+        {
+            if (!memory.Tags.ContainsKey(Constants.ReservedDocumentIdTag))
+            {
+                this._log.LogError("The memory record is missing the '{0}' tag", Constants.ReservedDocumentIdTag);
+            }
+
+            if (!memory.Tags.ContainsKey(Constants.ReservedFileIdTag))
+            {
+                this._log.LogError("The memory record is missing the '{0}' tag", Constants.ReservedFileIdTag);
+            }
+
+            if (!memory.Tags.ContainsKey(Constants.ReservedFileTypeTag))
+            {
+                this._log.LogError("The memory record is missing the '{0}' tag", Constants.ReservedFileTypeTag);
+            }
+
+            // Note: a document can be composed by multiple files
+            string documentId = memory.Tags[Constants.ReservedDocumentIdTag].FirstOrDefault() ?? string.Empty;
+
+            // Identify the file in case there are multiple files
+            string fileId = memory.Tags[Constants.ReservedFileIdTag].FirstOrDefault() ?? string.Empty;
+
+            // TODO: URL to access the file
+            string linkToFile = $"{documentId}/{fileId}";
+
+            string fileContentType = memory.Tags[Constants.ReservedFileTypeTag].FirstOrDefault() ?? string.Empty;
+            string fileName = memory.Payload[Constants.ReservedPayloadFileNameField].ToString() ?? string.Empty;
+
+            var partitionText = memory.Payload[Constants.ReservedPayloadTextField].ToString()?.Trim() ?? "";
+            if (string.IsNullOrEmpty(partitionText))
+            {
+                this._log.LogError("The document partition is empty, doc: {0}", memory.Id);
+                continue;
+            }
+
+            this._log.LogTrace("Adding result with relevance {0}", relevance);
+
+            // If the file is already in the list of citations, only add the partition
+            var citation = result.Results.FirstOrDefault(x => x.Link == linkToFile);
+            if (citation == null)
+            {
+                citation = new Citation();
+                result.Results.Add(citation);
+            }
+
+            // Add the partition to the list of citations
+            citation.Link = linkToFile;
+            citation.SourceContentType = fileContentType;
+            citation.SourceName = fileName;
+            citation.Tags = memory.Tags;
+
+#pragma warning disable CA1806 // it's ok if parsing fails
+            DateTimeOffset.TryParse(memory.Payload[Constants.ReservedPayloadLastUpdateField].ToString(), out var lastUpdate);
+#pragma warning restore CA1806
+
+            citation.Partitions.Add(new Citation.Partition
+            {
+                Text = partitionText,
+                Relevance = (float)relevance,
+                LastUpdate = lastUpdate,
+            });
+        }
+
+        if (result.Results.Count == 0)
+        {
+            this._log.LogWarning("No memories found");
+        }
+
+        return result;
+    }
+
     public async Task<MemoryAnswer> AskAsync(string index, string question, MemoryFilter? filter = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(question))
